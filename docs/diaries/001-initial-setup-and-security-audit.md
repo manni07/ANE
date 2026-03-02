@@ -245,3 +245,57 @@ Alle Teilprobleme von HIGH-03 sind vollstaendig behoben:
 | HOCH (HIGH-01–05) | 5 | HIGH-01 BEHOBEN, HIGH-02 BEHOBEN, HIGH-03 BEHOBEN, HIGH-04–05 Offen |
 | MITTEL (MED-01–06) | 6 | BEHOBEN |
 | NIEDRIG (LOW-01–04) | 4 | BEHOBEN |
+
+## HIGH-04 Fix (2026-03-02)
+
+Branch `fix/high-security-findings` (fortgesetzt nach HIGH-03). HIGH-04 behoben.
+
+### Problem
+
+Alle `malloc()` und `calloc()` Aufrufe in den 5 Alloc-Helperfunktionen von `stories_config.h` sowie in den direkten Allokationen in `train_large.m` prueften den Rueckgabewert nicht. Ein NULL-Pointer (OOM) fuehlte sofort zu einem Segfault — statt zu einer verstaendlichen Fehlermeldung. Bei Multi-Stunden-Trainingslaeufen ist OOM ein fataler, nicht behebbarer Zustand.
+
+### Aenderungen
+
+| Datei | Zeile | Aenderung |
+|-------|-------|-----------|
+| `training/stories_config.h` | 145–155 | `xmf(n)` und `xcf(n)` static inline Helfer hinzugefuegt: rufen `abort()` mit diagnostischer Stderr-Ausgabe bei OOM auf |
+| `training/stories_config.h` | 156 | `adam_alloc()`: `calloc(n,4)` → `xcf(n)` (2 Stellen) |
+| `training/stories_config.h` | 161–165 | `layer_weights_alloc()`: 8x `malloc(X*4)` → `xmf(X)` |
+| `training/stories_config.h` | 184–192 | `layer_acts_alloc()`: 13x `malloc(X*4)` → `xmf(X)` (mit `(size_t)` Cast fuer SEQ*DIM/HIDDEN) |
+| `training/stories_config.h` | 200–204 | `layer_grads_alloc()`: 9x `calloc(X,4)` → `xcf(X)` |
+| `training/train_large.m` | 238–241 | `rms_final`, `embed`, `grms_final`, `gembed`: 4 direkte Allokationen → `xmf`/`xcf` |
+| `training/train_large.m` | 320–335, 495, 518–565, 583 | 27 per-Iteration Temporaer-Puffer: alle `malloc(SEQ*X*4)` → `xmf((size_t)SEQ*X)` und `calloc(SEQ*X,4)` → `xcf((size_t)SEQ*X)` |
+
+**Gesamt: 31 Call-Sites ersetzt.**
+
+### Design-Entscheidungen
+
+- **`abort()` statt `return NULL`**: OOM waehrend eines laufenden Trainings bedeutet ein systemweites Problem. Mit NULL weiterzumachen wuerde Gewichte still korrumpieren — viel schlimmer als ein sauberer Abbruch.
+- **`sizeof(float)` statt hartkodiertem `4`**: Klarheitsgewinn; auf allen unterstuetzten Plattformen identisches Verhalten.
+- **`(size_t)` Cast bei SEQ*DIM/HIDDEN**: Verhindert einen potentiellen 32-bit Integer-Overflow bei grossen Sequenzlaengen (auch wenn SEQ/DIM momentan in int-Range liegen).
+- **Helfer-Namen `xmf`/`xcf`**: Kurz und konsistent mit dem tersem Stil des Projekts. `xmf` = "xmalloc float", `xcf` = "xcalloc float".
+- **`layer_adam_alloc()` nicht direkt geaendert**: Ruft `adam_alloc()` auf, das nun intern `xcf()` verwendet — transitiv bereits gesichert.
+
+### Build-Verifikation
+
+- `make train_large` kompiliert sauber ohne Fehler oder Warnungen.
+- Commit: `78666fc` auf Branch `fix/high-security-findings`
+
+### Status HIGH-04
+
+Alle Call-Sites vollstaendig behoben:
+1. `stories_config.h` `adam_alloc()` — 2 xcf()-Stellen
+2. `stories_config.h` `layer_weights_alloc()` — 8 xmf()-Stellen
+3. `stories_config.h` `layer_acts_alloc()` — 13 xmf()-Stellen
+4. `stories_config.h` `layer_grads_alloc()` — 9 xcf()-Stellen
+5. `train_large.m` direkte Allokationen — 4 Stellen (embed, rms_final, grads)
+6. `train_large.m` per-Iteration Temporaer-Puffer — 27 Stellen
+
+## Aktualisierter Status (nach HIGH-04)
+
+| Finding-Typ | Anzahl | Status |
+|-------------|--------|--------|
+| KRITISCH (CRIT-01–04) | 4 | BEHOBEN |
+| HOCH (HIGH-01–05) | 5 | HIGH-01 BEHOBEN, HIGH-02 BEHOBEN, HIGH-03 BEHOBEN, HIGH-04 BEHOBEN, HIGH-05 Offen |
+| MITTEL (MED-01–06) | 6 | BEHOBEN |
+| NIEDRIG (LOW-01–04) | 4 | BEHOBEN |
