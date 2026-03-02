@@ -85,9 +85,11 @@ Alle 6 MED-Findings behoben. Simulation: 2–3 Iterationsrunden, Gesamtbewertung
 | Finding-Typ | Anzahl | Status |
 |-------------|--------|--------|
 | KRITISCH (CRIT-01–04) | 4 | ✅ BEHOBEN |
-| HOCH (HIGH-01–05) | 5 | HIGH-01 ✅ BEHOBEN, HIGH-02–05 Offen |
+| HOCH (HIGH-01–05) | 5 | ✅ BEHOBEN |
 | MITTEL (MED-01–06) | 6 | ✅ BEHOBEN |
 | NIEDRIG (LOW-01–04) | 4 | ✅ BEHOBEN |
+
+**Alle 19 Sicherheitsbefunde vollständig behoben** (Stand: 2026-03-02)
 
 ## HIGH-01 Fix (2026-03-02)
 
@@ -299,3 +301,147 @@ Alle Call-Sites vollstaendig behoben:
 | HOCH (HIGH-01–05) | 5 | HIGH-01 BEHOBEN, HIGH-02 BEHOBEN, HIGH-03 BEHOBEN, HIGH-04 BEHOBEN, HIGH-05 Offen |
 | MITTEL (MED-01–06) | 6 | BEHOBEN |
 | NIEDRIG (LOW-01–04) | 4 | BEHOBEN |
+
+## HIGH-04 Nachtrag: stories_cpu_ops.h (2026-03-02)
+
+Branch `fix/high-security-findings` (fortgesetzt nach HIGH-04 Code-Review). Code-Review identifizierte 7 weitere rohe `malloc`/`calloc` Call-Sites in `stories_cpu_ops.h`, die beim initialen HIGH-04-Fix nicht erfasst wurden.
+
+### Problem
+
+`stories_cpu_ops.h` enthielt 7 rohe `malloc`/`calloc`-Aufrufe ohne NULL-Check. `stories_config.h` ist in `stories_cpu_ops.h` via `#include` eingebunden, sodass `xmf()`/`xcf()` bereits verfuegbar waren — die Call-Sites wurden aber initial uebersehen.
+
+### Aenderungen
+
+| Datei | Zeile | Vorher | Nachher |
+|-------|-------|--------|---------|
+| `training/stories_cpu_ops.h` | 8 | `(float*)malloc(S*4)` | `xmf(S)` |
+| `training/stories_cpu_ops.h` | 9 | `(float*)calloc(S, sizeof(float))` | `xcf(S)` |
+| `training/stories_cpu_ops.h` | 25 | `(float*)malloc(S*4)` | `xmf(S)` |
+| `training/stories_cpu_ops.h` | 26 | `(float*)calloc(S, sizeof(float))` | `xcf(S)` |
+| `training/stories_cpu_ops.h` | 33 | `(float*)malloc(S*4)` | `xmf(S)` |
+| `training/stories_cpu_ops.h` | 35 | `(float*)calloc(S, sizeof(float))` | `xcf(S)` |
+| `training/stories_cpu_ops.h` | 74 | `(float*)malloc(S * V * 4)` | `xmf((size_t)S * V)` |
+
+Funktionen betroffen: `rmsnorm()`, `rmsnorm_bwd()`, `cross_entropy_loss()`.
+
+### Design-Entscheidungen
+
+- **`xmf(S)` statt `malloc(S*4)`**: Semantisch aequivalent (n Floats), aber OOM-sicher durch `abort()` in `xmf()`. Kein Schreibfehler-Risiko durch hartkodierte `*4`.
+- **`xcf(S)` statt `calloc(S, sizeof(float))`**: Identisch — `xcf(n)` ruft intern `calloc(n, sizeof(float))` auf. Zero-Initialisierung bleibt erhalten.
+- **`(size_t)S * V` in `cross_entropy_loss`**: `S * V` koennte bei `int`-Multiplikation ueberlaufen (z.B. S=512, V=32000 = 16.384.000 Floats = 62.5 MB — noch in int-Range, aber Praezedenzfall gesetzt). `(size_t)`-Cast links vor der Multiplikation erzwingt 64-bit-Arithmetik.
+- **`free()` Aufrufe unveraendert**: `free()` funktioniert korrekt auf Pointern, die von `xmf()`/`xcf()` zurueckgegeben wurden, da diese intern `malloc`/`calloc` aufrufen.
+
+### Build-Verifikation
+
+- `make train_large` kompiliert sauber ohne Fehler oder Warnungen.
+- Commit: `ce2d68c` auf Branch `fix/high-security-findings`
+
+### Aktualisierter Status HIGH-04
+
+Alle Call-Sites vollstaendig behoben (inkl. Nachtrag):
+1. `stories_config.h` Alloc-Helfer — 32 Stellen (Commit 78666fc)
+2. `train_large.m` direkte + per-Iteration Allokationen — 31 Stellen (Commit 78666fc)
+3. `stories_cpu_ops.h` `rmsnorm()`, `rmsnorm_bwd()`, `cross_entropy_loss()` — 7 Stellen (Commit ce2d68c)
+
+## HIGH-04 Nachtrag 2: stories_io.h, ane_runtime.h, ane_mil_gen.h (2026-03-02)
+
+Branch `fix/high-security-findings` (fortgesetzt nach HIGH-04 Nachtrag 1). Code-Review identifizierte 9 weitere rohe `calloc`/`malloc` Call-Sites in 3 weiteren Dateien.
+
+### Problem
+
+Nach dem Fix von `stories_config.h`, `train_large.m` und `stories_cpu_ops.h` verblieben 9 ungeschuetzte Allokationen:
+- `stories_io.h`: 1x `calloc(1, sizeof(Kern))` ohne NULL-Check — sofortiger NULL-Deref auf `k->model = ...`
+- `ane_runtime.h`: 5x rohe Allokationen fuer `ANEKernel`, `inputBytes`, `outputBytes`, `ioInputs`, `ioOutputs` — die ersten 4 memcpy/Array-Zugriffe wuerden bei OOM Heap korrumpieren
+- `ane_mil_gen.h`: 3x `calloc(total, 1)` fuer `uint8_t *buf` ohne NULL-Check — sofortiger NULL-Deref auf `buf[0] = 0x01`
+
+### Aenderungen
+
+| Datei | Zeile | Allokation | Guard |
+|-------|-------|-----------|-------|
+| `training/stories_io.h` | 142 | `calloc(1, sizeof(Kern))` | `if (!k) { fprintf(stderr, "OOM: calloc(Kern)\n"); abort(); }` |
+| `training/ane_runtime.h` | 113 | `calloc(1, sizeof(ANEKernel))` | `if (!k) { fprintf(stderr, "OOM: calloc(ANEKernel)\n"); abort(); }` |
+| `training/ane_runtime.h` | 119 | `malloc(nInputs * sizeof(size_t))` | `if (!k->inputBytes) { fprintf(stderr, "OOM: malloc(inputBytes)\n"); abort(); }` |
+| `training/ane_runtime.h` | 121 | `malloc(nOutputs * sizeof(size_t))` | `if (!k->outputBytes) { fprintf(stderr, "OOM: malloc(outputBytes)\n"); abort(); }` |
+| `training/ane_runtime.h` | 127 | `malloc(nInputs * sizeof(IOSurfaceRef))` | `if (!k->ioInputs) { fprintf(stderr, "OOM: malloc(ioInputs)\n"); abort(); }` |
+| `training/ane_runtime.h` | 129 | `malloc(nOutputs * sizeof(IOSurfaceRef))` | `if (!k->ioOutputs) { fprintf(stderr, "OOM: malloc(ioOutputs)\n"); abort(); }` |
+| `training/ane_mil_gen.h` | 27 | `calloc(total, 1)` in `mil_build_weight_blob` | `if (!buf) { fprintf(stderr, "OOM: calloc(%lu)\n", ...); abort(); }` |
+| `training/ane_mil_gen.h` | 160 | `calloc(total, 1)` in `mil_build_qkv_weight_blob` | `if (!buf) { fprintf(stderr, "OOM: calloc(%lu)\n", ...); abort(); }` |
+| `training/ane_mil_gen.h` | 183 | `calloc(total, 1)` in `mil_build_ffn_up_weight_blob` | `if (!buf) { fprintf(stderr, "OOM: calloc(%lu)\n", ...); abort(); }` |
+
+### Design-Entscheidungen
+
+- **Inline NULL-Guards statt `xmf`/`xcf`**: Die betroffenen Allokationen sind nicht vom Typ `float*`. Die Helfer `xmf()`/`xcf()` sind spezifisch fuer Float-Arrays (`malloc(n * sizeof(float))`). Fuer `Kern*`, `ANEKernel*`, `size_t*`, `IOSurfaceRef*` und `uint8_t*` sind inline Guards die korrekte Wahl.
+- **`abort()` statt `return NULL`**: Konsistent mit dem restlichen HIGH-04-Ansatz. OOM im Kontext eines Multi-Stunden-Trainings ist ein nicht behebbarer Systemfehler — ein sauberer Abbruch mit Diagnoseausgabe ist besser als stilles Speicherkorrumpieren.
+- **`(unsigned long)total` Cast in `ane_mil_gen.h`**: `NSUInteger` ist auf macOS ein `unsigned long`. Der Cast verhindert `-Wformat`-Warnungen beim `%lu`-Format-Specifier.
+
+### Build-Verifikation
+
+- `make train_large` kompiliert sauber ohne Fehler oder Warnungen.
+- Commit: `87014bd` auf Branch `fix/high-security-findings`
+
+### Aktualisierter Status HIGH-04 (vollstaendig)
+
+Alle Call-Sites vollstaendig behoben (alle Nachwuchsfunde eingeschlossen):
+1. `stories_config.h` Alloc-Helfer — 32 Stellen (Commit 78666fc)
+2. `train_large.m` direkte + per-Iteration Allokationen — 31 Stellen (Commit 78666fc)
+3. `stories_cpu_ops.h` `rmsnorm()`, `rmsnorm_bwd()`, `cross_entropy_loss()` — 7 Stellen (Commit ce2d68c)
+4. `stories_io.h`, `ane_runtime.h`, `ane_mil_gen.h` — 9 Stellen (Commit 87014bd)
+5. `stories_mil.h` `get_mask_blob()` Maske — 1 Stelle (Commit 42eae54)
+
+## Aktualisierter Status (nach HIGH-04 vollstaendig)
+
+| Finding-Typ | Anzahl | Status |
+|-------------|--------|--------|
+| KRITISCH (CRIT-01–04) | 4 | BEHOBEN |
+| HOCH (HIGH-01–05) | 5 | HIGH-01 BEHOBEN, HIGH-02 BEHOBEN, HIGH-03 BEHOBEN, HIGH-04 BEHOBEN, HIGH-05 Offen |
+| MITTEL (MED-01–06) | 6 | BEHOBEN |
+| NIEDRIG (LOW-01–04) | 4 | BEHOBEN |
+
+## HIGH-05 Fix (2026-03-02)
+
+Branch `fix/high-security-findings` (fortgesetzt nach HIGH-04 vollstaendig). HIGH-05 behoben.
+
+### Problem
+
+`ane_eval(Kern *k)` in `stories_io.h` war `void` und ignorierte den `BOOL`-Rueckgabewert von `evaluateWithQoS:options:request:error:`. Bei ANE-Ausfuehrungsfehlern (Hardware-Fehler, Modellfehler) lief das Training still mit veralteten/inkorrekten Gradienten weiter.
+
+### Aenderungen
+
+| Datei | Zeile | Aenderung |
+|-------|-------|-----------|
+| `training/stories_io.h` | 164 | `static void ane_eval(Kern *k)` → `static bool ane_eval(Kern *k)` (HIGH-05 Kommentar); `BOOL ok =` Rueckgabe-Capture; `NSError *e` bereits vorhanden (wird nun ausgewertet); `if (!ok) fprintf(stderr, ...)` Fehlerausgabe; `return (bool)ok` |
+| `training/train_large.m` | 411 | `bool step_ok = true;` vor der Akkumulations-`for`-Schleife eingefuegt (HIGH-05 Kommentar) |
+| `training/train_large.m` | 437, 450, 513, 553, 556, 580 | Alle 6 `ane_eval(...)` Call-Sites → `step_ok &= ane_eval(...)` |
+| `training/train_large.m` | 636–639 | `if (!step_ok)` Guard nach dem Akkumulations-Loop: `fprintf(stderr, ...)` + `continue` (springt zur naechsten `while`-Iteration, ueberspringt Adam-Update) |
+
+### Design-Entscheidungen
+
+- **`&=` Operator**: Propagiert `false` korrekt durch alle Iterationen — wenn auch nur ein einziges `ane_eval()` ueber alle Schichten und Akkumulationsschritte scheitert, wird `step_ok` dauerhaft `false`.
+- **`continue` zielt auf `while (step < total_steps)`**: Die `if (!step_ok)` Pruefung liegt ausserhalb der inneren `for (a=0..ACCUM_STEPS)` Schleife, aber innerhalb der aeusseren `while`. Ein `continue` springt daher korrekt zum naechsten `while`-Durchlauf (naechste Kompilierungsrunde), nicht zum naechsten Akkumulationsschritt.
+- **`NSError *e = nil` war bereits vorhanden**: Der `e`-Parameter war schon in der alten Implementierung als `nil` initialisiert und an `objc_msgSend` uebergeben — der einzige fehlende Teil war das Auswerten des Rueckgabewerts und der NSError-Beschreibung.
+- **Kein `abort()` bei Fehler**: Im Gegensatz zu OOM-Fehlern (HIGH-04) ist ein transienter ANE-Fehler potenziell behebbar. Das Training ueberspringt den Schritt und faehrt mit dem naechsten fort — degradiert den Fortschritt, stoppt ihn aber nicht.
+- **`step_ok` ausserhalb der Layer-Schleife**: Eine einzelne `bool`-Variable reicht — die `&=`-Verkettung ueber alle Schichten und alle Akkumulationsschritte akkumuliert korrekt.
+
+### Build-Verifikation
+
+- `make train_large` kompiliert sauber ohne Fehler oder Warnungen (Compiler-Aufruf: `xcrun clang -O2 -Wall -Wno-deprecated-declarations -fobjc-arc ...`).
+- Commit: `f78b943` auf Branch `fix/high-security-findings`
+
+### Status HIGH-05
+
+Alle Teilprobleme vollstaendig behoben:
+1. `stories_io.h` `ane_eval()` von `void` zu `bool` geaendert — Commit f78b943
+2. `train_large.m` `step_ok` Deklaration vor Akkumulationsschleife — Commit f78b943
+3. `train_large.m` 6 Call-Sites mit `step_ok &=` — Commit f78b943
+4. `train_large.m` Adam-Update-Skip bei `!step_ok` — Commit f78b943
+
+## Abschlusstatus: Alle HIGH-Findings behoben (2026-03-02)
+
+| Finding-Typ | Anzahl | Status |
+|-------------|--------|--------|
+| KRITISCH (CRIT-01–04) | 4 | BEHOBEN |
+| HOCH (HIGH-01–05) | 5 | ALLE BEHOBEN |
+| MITTEL (MED-01–06) | 6 | BEHOBEN |
+| NIEDRIG (LOW-01–04) | 4 | BEHOBEN |
+
+Alle 19 Sicherheitsbefunde vollstaendig behoben. Branch: `fix/high-security-findings` auf `manni07/ANE`.

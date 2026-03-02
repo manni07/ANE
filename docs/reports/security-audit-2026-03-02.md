@@ -140,6 +140,7 @@ size_t tot = 128 + ws;
 ### [HIGH-01] Keine Eingabevalidierung für Token-Indizes
 **Datei:** `training/train_large.m:375-376`
 **Schweregrad:** HOCH
+**Status: BEHOBEN** (2026-03-02, Branch `fix/high-security-findings`)
 
 ```c
 size_t max_pos = n_tokens - SEQ - 1;
@@ -159,6 +160,7 @@ uint16_t *input_tokens = token_data + pos;
 ### [HIGH-02] Checkpoint-Pfad mit relativer Verzeichnis-Navigation
 **Datei:** `training/train_large.m:8-10`
 **Schweregrad:** HOCH
+**Status: BEHOBEN** (2026-03-02, Branch `fix/high-security-findings`)
 
 ```c
 #define CKPT_PATH "ane_stories110M_ckpt.bin"
@@ -176,6 +178,7 @@ uint16_t *input_tokens = token_data + pos;
 ### [HIGH-03] `execl()` zur Prozessneustart ohne Argument-Validierung
 **Datei:** `training/train_large.m:331`
 **Schweregrad:** HOCH
+**Status: BEHOBEN** (2026-03-02, Branch `fix/high-security-findings`)
 
 ```c
 execl(argv[0], argv[0], "--resume", NULL);
@@ -191,6 +194,7 @@ execl(argv[0], argv[0], "--resume", NULL);
 ### [HIGH-04] Fehlende `malloc()`/`calloc()`-Rückgabewert-Prüfungen
 **Dateien:** Alle `.m` und `.h` Dateien
 **Schweregrad:** HOCH
+**Status: BEHOBEN** (2026-03-02, Branch `fix/high-security-findings`)
 
 ```c
 // train_large.m:219
@@ -204,6 +208,7 @@ Keiner der `malloc()`/`calloc()`-Aufrufe prüft den Rückgabewert auf NULL. Bei 
 ### [HIGH-05] ANE-Inferenz ohne Fehlerprüfung im Trainings-Hot-Path
 **Datei:** `training/stories_io.h:131-134`
 **Schweregrad:** HOCH
+**Status: BEHOBEN** (2026-03-02, Branch `fix/high-security-findings`)
 
 ```c
 static void ane_run(Kern *k) {
