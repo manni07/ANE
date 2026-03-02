@@ -113,3 +113,135 @@ Zwei zusammenhaengende Schwachstellen:
 ### Build-Verifikation
 - `make train_large` kompiliert ohne Fehler oder neue Warnungen.
 - Commit: `236e495` auf Branch `fix/high-security-findings`
+
+## HIGH-01 Code-Review Fixes (2026-03-02)
+
+Zwei weitere Schwachstellen aus dem Code-Review zu HIGH-01 behoben.
+
+### Problem 1 (Critical): embed_backward OOB-Write / Heap Corruption
+
+`embed_backward()` in `training/stories_cpu_ops.h` indexierte `d_embed` mit `tokens[t]` ohne Bereichspruefung — ein schreibender Out-of-Bounds-Zugriff (Heap Corruption), der schwerwiegender ist als der lesende OOB in `embed_lookup()`.
+
+**Fix:** Identischer VOCAB-Clamp wie in `embed_lookup()`, unmittelbar nach `int tok = tokens[t];` in `embed_backward()`:
+
+```c
+if (tok >= VOCAB) { tok = 0; }  // HIGH-01: clamp invalid token -> position 0
+```
+
+Datei: `training/stories_cpu_ops.h`, Zeile 126
+
+### Problem 2 (Important): Resource Leak im Early-Exit von train_large.m
+
+Der Early-Exit-Guard (`n_tokens < SEQ + 1`) gab `return 1` zurueck, ohne zuvor den offenen File-Descriptor `data_fd` und die aktive mmap `token_data` freizugeben — ein FD- und Speicher-Leak.
+
+**Fix:** `munmap()` + `close()` vor `return 1` eingefuegt:
+
+```c
+if (n_tokens < (size_t)SEQ + 1) {
+    fprintf(stderr, "Token file too small: %zu tokens, need >%d\n", n_tokens, SEQ + 1);
+    munmap(token_data, data_len);
+    close(data_fd);
+    return 1;
+}
+```
+
+Datei: `training/train_large.m`, Zeilen 299–304
+
+### Aenderungstabelle
+
+| Datei | Zeile | Aenderung |
+|-------|-------|-----------|
+| `training/stories_cpu_ops.h` | 126 | VOCAB-Clamp in `embed_backward()`: `if (tok >= VOCAB) { tok = 0; }` |
+| `training/train_large.m` | 301–302 | `munmap(token_data, data_len)` + `close(data_fd)` vor `return 1` |
+
+### Build-Verifikation
+- `make train_large` kompiliert sauber ohne Fehler oder neue Warnungen.
+- Commit: `ef1bb7d` auf Branch `fix/high-security-findings`
+
+### Status HIGH-01
+Alle vier Teilprobleme von HIGH-01 sind nun vollstaendig behoben:
+1. `train_large.m` n_tokens Underflow-Guard — Commit 236e495
+2. `embed_lookup()` OOB-Read Clamp — Commit 236e495
+3. `embed_backward()` OOB-Write Clamp — Commit ef1bb7d
+4. `train_large.m` Early-Exit Resource Leak — Commit ef1bb7d
+
+## HIGH-02 Fix (2026-03-02)
+
+Branch `fix/high-security-findings` (fortgesetzt nach HIGH-01). HIGH-02 behoben.
+
+### Problem
+
+Zwei zusammenhaengende Pfad-Validierungsprobleme in `train_large.m`:
+
+1. `DATA_PATH` wird mit `open()` geoeffnet ohne vorherige Aufloesung des Pfades. Wenn das Binary aus dem falschen Verzeichnis gestartet wird, gibt es eine kryptische "Cannot open" Fehlermeldung ohne Hinweis auf die Ursache.
+2. `MODEL_PATH` wird in `load_pretrained()` mit `fopen()` geoeffnet. Der aufgeloeste absolute Pfad wird nicht geloggt — erschwert Debugging bei falscher CWD. Beide Pfade nutzen relative `../../`-Komponenten und sind ein Pfad-Traversal-Risiko, falls sie je konfigurierbar gemacht werden.
+
+### Aenderungen
+
+| Datei | Zeile | Aenderung |
+|-------|-------|-----------|
+| `training/train_large.m` | 7 | `#include <limits.h>` fuer `PATH_MAX` (verifiziert: 1024 auf macOS) |
+| `training/train_large.m` | 17 | `realpath()` Audit-Log in `load_pretrained()` nach `fopen()` NULL-Check: gibt aufgeloesten absoluten Pfad aus |
+| `training/train_large.m` | 294–302 | `realpath()` Guard fuer `DATA_PATH` VOR `open()`: gibt klare Fehlermeldung mit Hinweis auf CWD aus und gibt `return 1` (kein FD offen, kein Cleanup noetig) |
+
+### Design-Entscheidungen
+
+- **`realpath()` Guard vor `open()`**: Das `realpath()`-Scheitern (Datei nicht gefunden) wird explizit vor dem `open()` abgefangen. Damit entfaellt der bisherige kryptische "Cannot open" Fehler bei falscher CWD.
+- **`return 1` ohne Cleanup**: Der `realpath()`-Guard sitzt vor dem `open()`-Aufruf — es gibt noch keinen offenen FD oder gemappten Speicher, der freigegeben werden muesste.
+- **Audit-Log mit `printf` (nicht `fprintf stderr`)**: Das Audit-Log in `load_pretrained()` ist diagnostische Ausgabe (kein Fehlerpfad), daher `printf` konsistent mit den anderen Ausgaben in der Funktion.
+- **Scoped `char rp[PATH_MAX]` Bloecke**: Beide `realpath()`-Aufrufe nutzen geklammerte Bloecke, um den Stack-Puffer lokal zu halten und Shadowing anderer Variablen zu vermeiden.
+
+### Build-Verifikation
+
+- `make train_large` kompiliert sauber ohne Fehler oder Warnungen.
+- Commit: `8929afc` auf Branch `fix/high-security-findings`
+
+### Status HIGH-02
+Alle Teilprobleme von HIGH-02 sind vollstaendig behoben:
+1. `train_large.m` `realpath()` Guard fuer `DATA_PATH` — Commit 8929afc
+2. `train_large.m` `realpath()` Audit-Log in `load_pretrained()` — Commit 8929afc
+
+## HIGH-03 Fix (2026-03-02)
+
+Branch `fix/high-security-findings` (fortgesetzt nach HIGH-02). HIGH-03 behoben.
+
+### Problem
+
+Zwei zusammenhaengende Schwachstellen im `execl()`-Prozessneustart-Block in `train_large.m` (Zeile 366):
+
+1. **FD- und mmap-Leak across exec**: `data_fd` (offener File-Descriptor) und `token_data` (aktive mmap-Region) wurden vor `execl()` nicht freigegeben. Nach `execl()` erbt der neue Prozess den FD und die mmap automatisch (POSIX: Dateideskriptoren bleiben ueber exec erhalten, sofern kein FD_CLOEXEC gesetzt), was zu Ressourcen-Leaks fuehrt.
+2. **Unaufgeloester `argv[0]`**: `execl(argv[0], ...)` nutzt den Pfad unveraendert so, wie das Programm aufgerufen wurde. Wenn der Start mit einem relativen Pfad (`./train_large` oder nur `train_large` ueber PATH) erfolgte, kann `execl()` fehlschlagen oder das falsche Binary finden, wenn sich das Arbeitsverzeichnis zwischen Start und Neustart geaendert hat.
+
+### Aenderungen
+
+| Datei | Zeilen | Aenderung |
+|-------|--------|-----------|
+| `training/train_large.m` | 364–372 | `realpath(argv[0], rp_exec)` Guard vor `execl()`; `munmap(token_data, data_len)` + `close(data_fd)` vor `execl()`; `execl(rp_exec, rp_exec, ...)` nutzt aufgeloesten Pfad; printf-Ausgabe zeigt aufgeloesten Pfad |
+
+### Design-Entscheidungen
+
+- **`realpath()` vor Cleanup**: `realpath()` scheitert nur, wenn das Binary nicht mehr existiert oder der Pfad unauflösbar ist — ein echter Konfigurationsfehler. In diesem Fall ist `return 1` korrekt, ohne vorher `munmap`/`close` aufzurufen, da `exit()` resp. Prozessende die Ressourcen automatisch freigibt.
+- **`munmap` vor `close`**: Reihenfolge ist wichtig: `munmap()` gibt die Mapping-Region frei (dereferenziert den FD nicht mehr), danach kann der FD sicher geschlossen werden.
+- **`rp_exec` statt `argv[0]` in beiden Positionen von `execl()`**: Sowohl `path`- als auch `argv[0]`-Argument von `execl()` nutzen den aufgeloesten Pfad, damit `/proc/self/exe` (bzw. macOS-Aequivalent) konsistent bleibt.
+- **`char rp_exec[PATH_MAX]`**: Stack-allozierter Puffer, konsistent mit dem Muster aus HIGH-02. `PATH_MAX` ist via `<limits.h>` (seit HIGH-02) bereits im Build.
+
+### Build-Verifikation
+
+- `make train_large` kompiliert sauber ohne Fehler oder Warnungen.
+- Commit: `b5c3cf9` auf Branch `fix/high-security-findings`
+
+### Status HIGH-03
+
+Alle Teilprobleme von HIGH-03 sind vollstaendig behoben:
+1. `train_large.m` `munmap()` vor `execl()` — Commit b5c3cf9
+2. `train_large.m` `close()` vor `execl()` — Commit b5c3cf9
+3. `train_large.m` `realpath()` Guard fuer `argv[0]` — Commit b5c3cf9
+
+## Aktualisierter Status (nach HIGH-03)
+
+| Finding-Typ | Anzahl | Status |
+|-------------|--------|--------|
+| KRITISCH (CRIT-01–04) | 4 | BEHOBEN |
+| HOCH (HIGH-01–05) | 5 | HIGH-01 BEHOBEN, HIGH-02 BEHOBEN, HIGH-03 BEHOBEN, HIGH-04–05 Offen |
+| MITTEL (MED-01–06) | 6 | BEHOBEN |
+| NIEDRIG (LOW-01–04) | 4 | BEHOBEN |
