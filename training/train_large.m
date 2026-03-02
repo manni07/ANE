@@ -235,10 +235,10 @@ int main(int argc, char *argv[]) {
         }
 
         // Final RMSNorm + embedding + classifier
-        float *rms_final = (float*)malloc(DIM*4);
-        float *embed = (float*)malloc(VOCAB*DIM*4);  // [VOCAB, DIM] row-major
-        float *grms_final = (float*)calloc(DIM, 4);
-        float *gembed = (float*)calloc(VOCAB*DIM, 4);
+        float *rms_final = xmf(DIM);
+        float *embed = xmf((size_t)VOCAB*DIM);  // [VOCAB, DIM] row-major
+        float *grms_final = xcf(DIM);
+        float *gembed = xcf((size_t)VOCAB*DIM);
         AdamState arms_final = adam_alloc(DIM);
         AdamState aembed = adam_alloc((size_t)VOCAB*DIM);
 
@@ -316,23 +316,23 @@ int main(int argc, char *argv[]) {
         printf("Token data: %zu tokens (%.1f MB)\n", n_tokens, data_len/1e6);
 
         // Gradient buffers shared across layers (reused each step)
-        float *dy = (float*)malloc(SEQ*DIM*4);            // gradient flowing backward
-        float *dffn = (float*)malloc(SEQ*DIM*4);
-        float *dh1 = (float*)malloc(SEQ*HIDDEN*4);
-        float *dh3 = (float*)malloc(SEQ*HIDDEN*4);
-        float *dx_ffn = (float*)malloc(SEQ*DIM*4);
-        float *dx2 = (float*)malloc(SEQ*DIM*4);
-        float *do_out_buf = (float*)malloc(SEQ*DIM*4);
-        float *dq = (float*)malloc(SEQ*DIM*4);
-        float *dk = (float*)malloc(SEQ*DIM*4);
-        float *dv = (float*)malloc(SEQ*DIM*4);
-        float *dx_attn = (float*)malloc(SEQ*DIM*4);
+        float *dy = xmf((size_t)SEQ*DIM);            // gradient flowing backward
+        float *dffn = xmf((size_t)SEQ*DIM);
+        float *dh1 = xmf((size_t)SEQ*HIDDEN);
+        float *dh3 = xmf((size_t)SEQ*HIDDEN);
+        float *dx_ffn = xmf((size_t)SEQ*DIM);
+        float *dx2 = xmf((size_t)SEQ*DIM);
+        float *do_out_buf = xmf((size_t)SEQ*DIM);
+        float *dq = xmf((size_t)SEQ*DIM);
+        float *dk = xmf((size_t)SEQ*DIM);
+        float *dv = xmf((size_t)SEQ*DIM);
+        float *dx_attn = xmf((size_t)SEQ*DIM);
 
         // x buffer for input to each layer (channel-first [DIM, SEQ])
-        float *x_cur = (float*)malloc(SEQ*DIM*4);
-        float *x_final = (float*)malloc(SEQ*DIM*4);     // after final rmsnorm
-        float *logits = (float*)malloc(SEQ*VOCAB*4);     // [VOCAB, SEQ] for cross-entropy
-        float *dlogits = (float*)malloc(SEQ*VOCAB*4);
+        float *x_cur = xmf((size_t)SEQ*DIM);
+        float *x_final = xmf((size_t)SEQ*DIM);     // after final rmsnorm
+        float *logits = xmf((size_t)SEQ*VOCAB);     // [VOCAB, SEQ] for cross-entropy
+        float *dlogits = xmf((size_t)SEQ*VOCAB);
 
         // Compile static sdpaBwd2 kernels (no weights, one per layer)
         Kern *sdpaBwd2[NLAYERS];
@@ -492,7 +492,7 @@ int main(int argc, char *argv[]) {
                 });
 
                 // Final RMSNorm backward
-                float *dx_rms_final = (float*)calloc(SEQ*DIM, 4);
+                float *dx_rms_final = xcf((size_t)SEQ*DIM);
                 rmsnorm_bwd(dx_rms_final, grms_final, dy, x_cur, rms_final, DIM, SEQ);
                 memcpy(dy, dx_rms_final, SEQ*DIM*4);
                 free(dx_rms_final);
@@ -515,11 +515,11 @@ int main(int argc, char *argv[]) {
                     io_read_fp16(kern[L].ffnBwd->ioOut, dh3,    DIM+HIDDEN,  HIDDEN, SEQ);
 
                     // dW FFN async
-                    float *capt_dffn = (float*)malloc(SEQ*DIM*4); memcpy(capt_dffn, dffn, SEQ*DIM*4);
-                    float *capt_silu = (float*)malloc(SEQ*HIDDEN*4); memcpy(capt_silu, ac->silu_out, SEQ*HIDDEN*4);
-                    float *capt_dh1 = (float*)malloc(SEQ*HIDDEN*4); memcpy(capt_dh1, dh1, SEQ*HIDDEN*4);
-                    float *capt_dh3 = (float*)malloc(SEQ*HIDDEN*4); memcpy(capt_dh3, dh3, SEQ*HIDDEN*4);
-                    float *capt_x2n = (float*)malloc(SEQ*DIM*4); memcpy(capt_x2n, ac->x2norm, SEQ*DIM*4);
+                    float *capt_dffn = xmf((size_t)SEQ*DIM); memcpy(capt_dffn, dffn, SEQ*DIM*4);
+                    float *capt_silu = xmf((size_t)SEQ*HIDDEN); memcpy(capt_silu, ac->silu_out, SEQ*HIDDEN*4);
+                    float *capt_dh1 = xmf((size_t)SEQ*HIDDEN); memcpy(capt_dh1, dh1, SEQ*HIDDEN*4);
+                    float *capt_dh3 = xmf((size_t)SEQ*HIDDEN); memcpy(capt_dh3, dh3, SEQ*HIDDEN*4);
+                    float *capt_x2n = xmf((size_t)SEQ*DIM); memcpy(capt_x2n, ac->x2norm, SEQ*DIM*4);
                     dispatch_group_async(dw_grp, dw_q, ^{
                         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, DIM, HIDDEN, SEQ,
                                     1.0f, capt_dffn, SEQ, capt_silu, SEQ, 1.0f, gr->W2, HIDDEN);
@@ -538,8 +538,8 @@ int main(int argc, char *argv[]) {
 
                     // dWo async
                     memcpy(do_out_buf, dx2, SEQ*DIM*4);
-                    float *capt_do = (float*)malloc(SEQ*DIM*4); memcpy(capt_do, do_out_buf, SEQ*DIM*4);
-                    float *capt_attn = (float*)malloc(SEQ*DIM*4); memcpy(capt_attn, ac->attn_out, SEQ*DIM*4);
+                    float *capt_do = xmf((size_t)SEQ*DIM); memcpy(capt_do, do_out_buf, SEQ*DIM*4);
+                    float *capt_attn = xmf((size_t)SEQ*DIM); memcpy(capt_attn, ac->attn_out, SEQ*DIM*4);
                     dispatch_group_async(dw_grp, dw_q, ^{
                         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, DIM, DIM, SEQ,
                                     1.0f, capt_do, SEQ, capt_attn, SEQ, 1.0f, gr->Wo, DIM);
@@ -559,10 +559,10 @@ int main(int argc, char *argv[]) {
                     io_read_fp16(kern[L].sdpaBwd1->ioOut, dv, 0, DIM, SEQ);
 
                     // dWq/dWk/dWv async
-                    float *capt_dq = (float*)malloc(SEQ*DIM*4); memcpy(capt_dq, dq, SEQ*DIM*4);
-                    float *capt_dk = (float*)malloc(SEQ*DIM*4); memcpy(capt_dk, dk, SEQ*DIM*4);
-                    float *capt_dv = (float*)malloc(SEQ*DIM*4); memcpy(capt_dv, dv, SEQ*DIM*4);
-                    float *capt_xn = (float*)malloc(SEQ*DIM*4); memcpy(capt_xn, ac->xnorm, SEQ*DIM*4);
+                    float *capt_dq = xmf((size_t)SEQ*DIM); memcpy(capt_dq, dq, SEQ*DIM*4);
+                    float *capt_dk = xmf((size_t)SEQ*DIM); memcpy(capt_dk, dk, SEQ*DIM*4);
+                    float *capt_dv = xmf((size_t)SEQ*DIM); memcpy(capt_dv, dv, SEQ*DIM*4);
+                    float *capt_xn = xmf((size_t)SEQ*DIM); memcpy(capt_xn, ac->xnorm, SEQ*DIM*4);
                     dispatch_group_async(dw_grp, dw_q, ^{
                         cblas_sgemm(CblasRowMajor, CblasNoTrans, CblasTrans, DIM, DIM, SEQ,
                                     1.0f, capt_dq, SEQ, capt_xn, SEQ, 1.0f, gr->Wq, DIM);
@@ -580,7 +580,7 @@ int main(int argc, char *argv[]) {
                     io_read_fp16(kern[L].qkvBwd->ioOut, dx_attn, 0, DIM, SEQ);
 
                     // RMSNorm1 backward (using saved layer input)
-                    float *dx_rms1 = (float*)calloc(SEQ*DIM, 4);
+                    float *dx_rms1 = xcf((size_t)SEQ*DIM);
                     rmsnorm_bwd(dx_rms1, gr->rms_att, dx_attn, ac->layer_in, lw[L].rms_att, DIM, SEQ);
 
                     // dy for next layer (going backward) = dx_rms1 + dx2 residual
