@@ -110,18 +110,23 @@ static ANEKernel *ane_compile(NSData *milText, NSData *weightData,
     }
 
     ANEKernel *k = calloc(1, sizeof(ANEKernel));
+    if (!k) { fprintf(stderr, "OOM: calloc(ANEKernel)\n"); abort(); }  // HIGH-04
     k->model = mdl;
     k->tmpDir = td;
     k->nInputs = nInputs;
     k->nOutputs = nOutputs;
     k->inputBytes = malloc(nInputs * sizeof(size_t));
+    if (!k->inputBytes) { fprintf(stderr, "OOM: malloc(inputBytes)\n"); abort(); }  // HIGH-04
     k->outputBytes = malloc(nOutputs * sizeof(size_t));
+    if (!k->outputBytes) { fprintf(stderr, "OOM: malloc(outputBytes)\n"); abort(); }  // HIGH-04
     memcpy(k->inputBytes, inputSizes, nInputs * sizeof(size_t));
     memcpy(k->outputBytes, outputSizes, nOutputs * sizeof(size_t));
 
     // Create IOSurfaces
     k->ioInputs = malloc(nInputs * sizeof(IOSurfaceRef));
+    if (!k->ioInputs) { fprintf(stderr, "OOM: malloc(ioInputs)\n"); abort(); }  // HIGH-04
     k->ioOutputs = malloc(nOutputs * sizeof(IOSurfaceRef));
+    if (!k->ioOutputs) { fprintf(stderr, "OOM: malloc(ioOutputs)\n"); abort(); }  // HIGH-04
     for (int i = 0; i < nInputs; i++)
         k->ioInputs[i] = ane_create_surface(inputSizes[i]);
     for (int i = 0; i < nOutputs; i++)

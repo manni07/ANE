@@ -139,6 +139,7 @@ static Kern *compile_kern_mil_w(NSString *mil, NSDictionary *weights, int ic_byt
     }
     __sync_fetch_and_add(&g_compile_count, 1);
     Kern *k = (Kern*)calloc(1, sizeof(Kern));
+    if (!k) { fprintf(stderr, "OOM: calloc(Kern)\n"); abort(); }  // HIGH-04
     k->model = (void*)CFBridgingRetain(mdl);
     k->ioIn = make_surface(ic_bytes);
     k->ioOut = make_surface(oc_bytes);

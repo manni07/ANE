@@ -24,6 +24,7 @@ static NSData *mil_build_weight_blob(const float *weights_f32, int out_ch, int i
     NSUInteger wsize = (NSUInteger)out_ch * in_ch * 2; // FP16
     NSUInteger total = 64 + 64 + wsize; // global header + chunk header + data
     uint8_t *buf = (uint8_t*)calloc(total, 1);
+    if (!buf) { fprintf(stderr, "OOM: calloc(%lu)\n", (unsigned long)total); abort(); }  // HIGH-04
     buf[0] = 0x01; buf[4] = 0x02;
     uint8_t *chunk = buf + 64;
     chunk[0] = 0xEF; chunk[1] = 0xBE; chunk[2] = 0xAD; chunk[3] = 0xDE;
@@ -156,6 +157,7 @@ static NSData *mil_build_qkv_weight_blob(const float *wq, const float *wk, const
     NSUInteger cs = 64 + wsize;
     NSUInteger total = 64 + 3 * cs;
     uint8_t *buf = (uint8_t*)calloc(total, 1);
+    if (!buf) { fprintf(stderr, "OOM: calloc(%lu)\n", (unsigned long)total); abort(); }  // HIGH-04
     buf[0] = 0x01; buf[4] = 0x02;
     const float *ws[3] = {wq, wk, wv};
     for (int w = 0; w < 3; w++) {
@@ -178,6 +180,7 @@ static NSData *mil_build_ffn_up_weight_blob(const float *w1, const float *w3, in
     NSUInteger cs = 64 + wsize;
     NSUInteger total = 64 + 2 * cs;
     uint8_t *buf = (uint8_t*)calloc(total, 1);
+    if (!buf) { fprintf(stderr, "OOM: calloc(%lu)\n", (unsigned long)total); abort(); }  // HIGH-04
     buf[0] = 0x01; buf[4] = 0x02;
     const float *ws[2] = {w1, w3};
     for (int w = 0; w < 2; w++) {
