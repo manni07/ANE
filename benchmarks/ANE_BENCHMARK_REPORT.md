@@ -1,7 +1,29 @@
 # Apple Neural Engine — Cross-Generation Benchmark Report
 
 Community-submitted benchmark data from [Issue #3](https://github.com/maderix/ANE/issues/3).
-All results use Stories110M (12-layer transformer, 109M params, dim=768, seq=256).
+
+## Model Configuration
+
+All training benchmarks use **Stories110M** — a Llama2-architecture transformer:
+
+```
+Parameter       Value
+────────────────────────
+Architecture    Llama2 (RoPE, SwiGLU, RMSNorm, GQA-ready)
+Layers          12
+Dimension       768
+Hidden (FFN)    2048
+Heads           12
+Vocab           32000 (Llama 2 BPE)
+Sequence        256
+Total Params    109.53M (84.95M transformer + 24.58M embedding)
+Training Data   TinyStories (~20M tokens, pretokenized)
+Optimizer       Adam (lr=1e-4 to 3e-4, b1=0.9, b2=0.999)
+Precision       FP16 on ANE, FP32 on CPU
+```
+
+Kernels per step (static pipeline): 72 (60 weight-bearing + 12 static sdpaBwd2).
+Forward: sdpaFwd + ffnW13 + ffnW2 per layer. Backward: ffnBwdW2t + ffnBwdW13t + wotBwd + sdpaBwd1 + sdpaBwd2 + qkvBwd per layer. Weight gradients (dW) via `cblas_sgemm` on CPU.
 
 ## Training Performance (Static Pipeline)
 

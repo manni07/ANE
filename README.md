@@ -29,7 +29,7 @@ The goal was to demonstrate that **training on the Apple Neural Engine — and p
 
 Some coverage of this project has overstated its implications. To be clear:
 
-- Training works, but utilization is low (~2-3% of peak) with significant engineering challenges remaining
+- Training works, but utilization is low (~5-9% of peak) with significant engineering challenges remaining
 - Many element-wise operations still fall back to CPU
 - This does **not** replace GPU training for anything beyond small research models today
 
@@ -57,11 +57,12 @@ This is MIT licensed for a reason. Everyone now has access to AI-assisted develo
 
 A from-scratch implementation of transformer training (forward + backward pass) running on the ANE in Apple Silicon. The ANE is a 15.8 TFLOPS (M4) inference accelerator that Apple does not expose for training. This project reverse-engineers the `_ANEClient` / `_ANECompiler` private APIs and the MIL (Model Intermediate Language) format to run custom compute graphs — including backpropagation — directly on ANE hardware.
 
-**Current results (M4, single transformer layer, dim=768, seq=512):**
-- 9.3 ms/step, 11.2% ANE utilization (1.78 TFLOPS sustained)
-- 6 ANE kernel dispatches per training step
+**Current results — Stories110M (12-layer, dim=768, seq=256, 109M params):**
+- Static pipeline: **91 ms/step** (M3 Ultra), **106 ms/step** (M4)
+- Dynamic pipeline: **110 ms/step**, no recompilation
+- 72 ANE kernels per step (static), 9 shared kernels (dynamic)
 - All forward and backward dx passes on ANE, dW gradients on CPU (Accelerate cblas)
-- Adam optimizer, gradient accumulation, checkpoint/resume
+- Adam optimizer, gradient accumulation, checkpoint/resume via exec() restart
 
 ## Architecture
 
@@ -146,8 +147,8 @@ No external dependencies. Uses only system frameworks + private ANE APIs resolve
 
 - **SDPA causal masking** — ANE hardware ignores `attn_mask` in SDPA ops; causal attention is decomposed into separate Q@K^T (ANE) → mask+softmax (ANE via add+softmax) → scores@V (ANE)
 - **~119 compile limit** — ANE compiler leaks resources; worked around via `exec()` restart with checkpoint
-- **Single layer** — Currently trains one transformer layer; multi-layer would need pipeline scheduling
-- **Synthetic data** — Currently uses random data for benchmarking; real tokenized data support is WIP
+- **Compile overhead** — Static pipeline recompiles 60+ kernels every 10 steps (~3.7s); dynamic pipeline avoids this
+- **Low utilization** — Training sustains ~1-2 TFLOPS out of 15.8+ peak due to CPU fallbacks and I/O overhead
 
 ## Performance History
 
